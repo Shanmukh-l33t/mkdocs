@@ -78,11 +78,25 @@ def _check_version(branch: str) -> None:
 
     stdout, _ = proc.communicate()
     msg = stdout.decode('utf-8').strip()
-    m = re.search(r'\d+(\.\d+)+((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?', msg, re.X | re.I)
-    previousv = version.parse(m.group()) if m else None
+    # Only a version explicitly identified as the MkDocs version can be
+    # trusted: the previous deployment's commit message may be a custom -m
+    # string whose version numbers belong to something else entirely (e.g.
+    # the documentation project's own version, see #4022).
+    m = re.search(
+        r'mkdocs version:?\s*(\d+(?:\.\d+)+(?:a\d+|b\d+|rc\d+)?(?:\.post\d+)?(?:\.dev\d+)?)',
+        msg,
+        re.I,
+    )
+    previousv = version.parse(m.group(1)) if m else None
     currentv = version.parse(mkdocs.__version__)
     if not previousv:
-        log.warning('Version check skipped: No version specified in previous deployment.')
+        if re.search(r'\d+(?:\.\d+)+', msg):
+            log.warning(
+                'Version check skipped: previous deployment message contains a version '
+                'number but does not identify it as the MkDocs version.'
+            )
+        else:
+            log.warning('Version check skipped: No version specified in previous deployment.')
     elif currentv > previousv:
         log.info(
             f'Previous deployment was done with MkDocs version {previousv}; '

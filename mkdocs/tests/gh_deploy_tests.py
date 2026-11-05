@@ -183,3 +183,21 @@ class TestGitHubDeployLogs(unittest.TestCase):
             '\n'.join(cm.output),
             'WARNING:mkdocs.commands.gh_deploy:Version check skipped: No version specified in previous deployment.',
         )
+
+    @mock.patch('subprocess.Popen')
+    def test_custom_message_with_unrelated_version(self, mock_popeno):
+        # A custom -m commit message may contain version numbers unrelated to
+        # MkDocs (e.g. the documentation project's own version); they must not
+        # be mistaken for the MkDocs version of the previous deployment (#4022).
+        mock_popeno().communicate.return_value = (
+            b'Updated documentation for TraceBase version 3.1.x.\n',
+            b'',
+        )
+
+        with self.assertLogs('mkdocs') as cm:
+            gh_deploy._check_version('gh-pages')
+        self.assertEqual(
+            '\n'.join(cm.output),
+            'WARNING:mkdocs.commands.gh_deploy:Version check skipped: previous deployment '
+            'message contains a version number but does not identify it as the MkDocs version.',
+        )
