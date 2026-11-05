@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import logging
 import shutil
+import sys
 import tempfile
 from os.path import isdir, isfile, join
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import urlsplit
 
 from mkdocs.commands.build import build
@@ -12,13 +14,42 @@ from mkdocs.config import load_config
 from mkdocs.livereload import LiveReloadServer, _serve_url
 
 if TYPE_CHECKING:
+    from typing import IO
+
     from mkdocs.config.defaults import MkDocsConfig
 
 log = logging.getLogger(__name__)
 
 
+def _replayable_config_file(
+    config_file: str | IO[bytes] | None,
+) -> Callable[[], str | IO[bytes] | None]:
+    """
+    Return a callable producing the config source each (re)load should read.
+
+    A config read from stdin (``mkdocs serve -f -``) can only be consumed once, and
+    the first load closes the stream. Rebuilds must therefore replay the buffered
+    bytes instead of re-opening ``'<stdin>'``, which raised
+    ``ConfigurationError: Config file '<stdin>' does not exist`` (issue #4053).
+    Any other source is returned unchanged so path-based configs keep their
+    existing reopen-by-name behavior.
+    """
+    is_stdin = (
+        config_file is sys.stdin
+        or config_file is getattr(sys.stdin, 'buffer', None)
+        or (not isinstance(config_file, str) and getattr(config_file, 'name', None) == '<stdin>')
+    )
+    if not is_stdin:
+        return lambda: config_file
+
+    data = config_file.read()  # type: ignore[union-attr]
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    return lambda: io.BytesIO(data)
+
+
 def serve(
-    config_file: str | None = None,
+    config_file: str | IO[bytes] | None = None,
     livereload: bool = True,
     build_type: str | None = None,
     watch_theme: bool = False,
@@ -37,9 +68,12 @@ def serve(
     # Create a temporary build directory, and set some options to serve it
     site_dir = tempfile.mkdtemp(prefix='mkdocs_')
 
+    # Buffer a stdin-provided config once so every rebuild can replay it.
+    next_config_file = _replayable_config_file(config_file)
+
     def get_config():
         config = load_config(
-            config_file=config_file,
+            config_file=next_config_file(),
             site_dir=site_dir,
             **kwargs,
         )
